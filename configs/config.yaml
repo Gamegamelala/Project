@@ -1,0 +1,308 @@
+program: sweep_interface.py
+method: grid
+name: clean
+metric:
+  name: bkd_acc
+  goal: maximize
+
+parameters:
+  # -------------------------
+  # Repro / Optim
+  # -------------------------
+  seed:
+    value: 5
+  lr:
+    values: [0.01]
+  gamma:
+    values: [1]
+  lr_method:
+    values: ['linear']
+  target_lr:
+    values: [0.02]
+  momentum:
+    values: [0.9]
+  poison_momentum:
+    values: [0.9]
+  decay:
+    values: [0.0005]
+  batch_size:
+    values: [64]
+  test_batch_size:
+    values: [1024]
+
+  # -------------------------
+  # FL schedule
+  # -------------------------
+  poison_start_epoch:
+    values: [1900]
+  epochs:
+    values: [2000]
+  poison_epochs:
+    values: [100]
+
+  num_total_participants:
+    value: 100
+  num_sampled_participants:
+    value: 10
+  sample_method:
+    values: ['random']
+  sample_poison_ratio:
+    values: [0]
+  dirichlet_alpha:
+    values: [0.9]
+
+  retrain_times:
+    values: [2]
+  attacker_retrain_times:
+    values: [3]
+  save_every:
+    value: 100
+
+  # -------------------------
+  # Attack config
+  # -------------------------
+  is_poison:
+    value: true
+  attacker_method:
+    values: ['sin-adv']
+  malicious_update_method:
+    values: ['label']
+  attack_method:
+    value: 'DBA'
+
+  target_class:
+    values: [2]
+  bkd_ratio:
+    values: [0.25]
+  trigger_outter_epochs:
+    values: [2]
+  trigger_lr:
+    values: [0.01]
+  adv_loss:
+    values: ['ce']
+
+  # 触发器大小/位置（CIFAR10 32x32 + size=5，右上角 y=32-5=27）
+  trigger_size:
+    values: [5]
+  trigger_pos_x:
+    value: 0
+  trigger_pos_y:
+    value: 27
+  trigger_num:
+    value: 10
+
+  load_benign_model:
+    values: [true]
+
+  attacker_lr_decay:
+    values: [5]
+  clip_factor:
+    values: [1]
+
+  # -------------------------
+  # Disturbance / DM (保留你原有)
+  # -------------------------
+  dm_type:
+    values: ['none']
+  dm_adv_epochs:
+    values: [5]
+  dm_adv_K:
+    values: [1]
+  dm_adv_model_count:
+    values: [1]
+  noise_model_count:
+    values: [9]
+  noise_loss_lambda:
+    values: [0.01]
+  wp_factor:
+    values: [0.05]
+
+  # -------------------------
+  # Model / Dataset
+  # -------------------------
+  model:
+    value: 'ResNet18'
+  dataset:
+    value: 'cifar10'
+
+  # -------------------------
+  # Other baseline agg params (保留，new_algorithm 不一定用到)
+  # -------------------------
+  krum_k:
+    value: 2
+  delta:
+    value: 0.01
+  k:
+    value: 3
+  robustLR_threshold:
+    value: 2
+  server_lr:
+    value: 1
+  sigma_param:
+    value: 0.002
+  N_num:
+    value: 1000
+  num_worker:
+    value: 0
+  alpha:
+    value: 0.001
+  agg_method:
+    values: ['new_algorithm']
+  num_adversaries:
+    values: [1]
+
+  # -------------------------
+  # (保留你原有) 重要性/tda/mpsa 相关
+  # -------------------------
+  alpha_loss:
+    value: 0.0001
+  beta_loss:
+    value: 0.0001
+  lambda_:
+    value: 1
+  use_tda_mpsa:
+    value: true
+  eps_c:
+    value: 0.5
+  eps_s:
+    value: 0.5
+  importance_threshold:
+    value: 0.00001
+  max_batches:
+    value: 10
+  tau:
+    value: 0.05
+
+  # -------------------------
+  # GSA params (你原有)
+  # -------------------------
+  gsa_alpha:
+    value: 0.9
+  gsa_beta:
+    value: 0.3
+
+  # =========================================================
+  # new_algorithm / LATE-Guard family (fler_patched.py 读取的参数)
+  # =========================================================
+
+  # --- 状态机/告警逻辑（可不改，给了默认稳值）
+  guard_window:
+    value: 50
+  guard_warmup:
+    value: 50
+  guard_sus_rate_hi:
+    value: 0.2              # sus_rate 超过该阈值倾向进入 alert
+  guard_cos_med_thr:
+    value: -0.02
+  guard_cos_drop_thr:
+    value: 0.06
+  guard_calm_patience:
+    value: 10
+  guard_trigger_need:
+    value: 3
+  guard_min_hist:
+    value: 20
+  guard_base_ema_m:
+    value: 0.9
+  guard_alert_ema_sus_cap:
+    value: 0.2
+  guard_gsa_union_sus_rate:
+    value: 0.2
+  guard_cos_bad_thr:
+    value: 0.02
+  guard_r_mad_k:
+    value: 3.0
+
+  # hard_drop 触发阈值（adv=4/10、10/10 时建议先用默认）
+  guard_hard_sus_rate:
+    value: 0.35
+  guard_hard_cos_med:
+    value: 0.0
+
+  # --- drop 策略（n=10：常态最多丢3，告警态最多丢5）
+  guard_max_drop_ratio_normal:
+    value: 0.3
+  guard_max_drop_ratio_alert:
+    value: 0.5
+
+  # --- suspicious 选择：不再 topk=2/3，改阈值 + 上下界 + 比例上限
+  guard_min_susp_k:
+    value: 1
+  guard_max_susp_ratio_normal:
+    value: 0.4              # 常态最多标 4/10 为 suspicious(用于mask)
+  guard_max_susp_ratio_alert:
+    value: 0.6              # 告警态最多标 6/10
+  guard_susp_z_thr_normal:
+    value: 1.0
+  guard_susp_z_thr_alert:
+    value: 0.7
+  guard_clean_frac:
+    value: 0.5              # 共识mask的“干净 core”比例（取低分 inlier）
+
+  # --- mask & probe（你原有 + 补全 clean_batches）
+  guard_eta:
+    value: 0.2
+  guard_eta_cap_min:
+    value: 0.02
+  guard_eta_cap_max:
+    value: 0.2
+
+  guard_topk_ratio:
+    value: 0.01
+  guard_sign_thr:
+    value: 0.75
+  guard_q_normal:
+    value: 0.6
+  guard_q_alert:
+    value: 0.5
+
+  guard_clean_batches_normal:
+    value: 2
+  guard_clean_batches_alert:
+    value: 10
+  guard_probe_batches_normal:
+    value: 10
+  guard_probe_batches_alert:
+    value: 20
+
+  # TSP 探针触发器参数
+  guard_probe_trigger_strength:
+    value: 1.0
+  guard_probe_trigger_seed:
+    value: 1234
+  guard_tsp_lambda:
+    value: 0.5
+
+  # --- repair（只在 hard_drop 且按频率触发）
+  guard_repair_steps:
+    value: 50
+  guard_repair_every:
+    value: 5
+  guard_repair_lr:
+    value: 0.001
+  guard_lam_kl:
+    value: 1.0
+  guard_beta_prox:
+    value: 0.0001
+  guard_clip_mult:
+    value: 2.0
+    
+    
+#    0_poison_pattern:
+#      value: [[2, 2], [2, 3], [3, 2], [3, 3]]
+#    1_poison_pattern:
+#      value: [[2, 4], [2, 5], [2, 6], [3, 4], [3, 5], [3, 6]]
+#    2_poison_pattern:
+#      value: [[4, 2], [4, 3], [5, 2], [5, 3], [6, 2]]
+#    3_poison_pattern:
+#      value: [[4, 4], [4, 5], [4, 6], [5, 4], [5, 5], [5, 6], [6, 3], [6, 4], [6, 5], [6, 6]]
+
+#    0_poison_pattern:
+#        value: [[2, 2], [2, 3], [2, 4], [2, 5], [2, 6], [3, 2], [3, 3], [3, 4], [3, 5], [3, 6], [4, 2], [4, 3], [4, 4], [4, 5], [4, 6]]
+#
+#    1_poison_pattern:
+#        value: [[5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [6, 2], [6, 3], [6, 4], [6, 5], [6, 6]]
+
+
+    # 0_poison_pattern:
+    #  value:[[2, 2], [2, 3], [2, 4], [2, 5], [2, 6], [6, 2], [3, 2], [3, 3], [3, 4], [3, 5], [3, 6], [6, 3], [4, 2], [4, 3],[4, 4], [4, 5], [4, 6], [6, 4], [5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [6, 5], [6, 6]]
