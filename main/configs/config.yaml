@@ -68,7 +68,7 @@ parameters:
   malicious_update_method:
     values: ['label']
   attack_method:
-    value: 'DBA'
+    value: 'My'
 
   target_class:
     values: [2]
@@ -147,7 +147,7 @@ parameters:
   alpha:
     value: 0.001
   agg_method:
-    values: ['new_algorithm']
+    values: ['krum']
   num_adversaries:
     values: [1]
 
@@ -286,6 +286,14 @@ parameters:
     value: 0.0001
   guard_clip_mult:
     value: 2.0
+  krum_m:
+    value: 3
+  trim_ratio:
+    value: 0.1
+  trim_k:
+    value: 1
+  fltrust_batches:
+    value: 5
     
     
 #    0_poison_pattern:
