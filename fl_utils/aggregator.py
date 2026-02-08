@@ -81,6 +81,16 @@ class Aggregator:
             return self.robustLR(weight_accumulator_by_client, global_model, sampled_participants, weight_accumulator)
         elif self.helper.config.agg_method == 'CRFL':
             return self.CRFL(global_model,weight_accumulator)
+        elif self.helper.config.agg_method == 'krum':
+            return self.krum(global_model, weight_accumulator_by_client, sampled_participants)
+        elif self.helper.config.agg_method == 'multi_krum':
+            return self.multi_krum(global_model, weight_accumulator_by_client, sampled_participants)
+        elif self.helper.config.agg_method == 'trimmed_mean':
+            return self.trimmed_mean(global_model, weight_accumulator_by_client, sampled_participants)
+        elif self.helper.config.agg_method == 'median':
+            return self.median(global_model, weight_accumulator_by_client, sampled_participants)
+        elif self.helper.config.agg_method == 'fltrust':
+            return self.fltrust(global_model, weight_accumulator_by_client, sampled_participants)
         elif self.helper.config.agg_method == 'SparseFed':
             return self.sparsefed_update(weight_accumulator, global_model)
         else:
@@ -112,7 +122,8 @@ class Aggregator:
 
     def krum_updates(self, weight_accumulator_by_client, sampled_participants):
         n_clients = len(sampled_participants)
-        m = n_clients - self.helper.config.krum_k - 2
+        krum_k = int(getattr(self.helper.config, "krum_k", 2))
+        m = n_clients - krum_k - 2
         distances = []
 
         # 计算客户端更新之间的成对距离
@@ -215,7 +226,179 @@ class Aggregator:
                 param.add_(agg_update[name].to(param.device).to(param.dtype))
 
         return True
+    def _apply_update(self, global_model, update_dict):
+        with torch.no_grad():
+            sd = global_model.state_dict()
+            for name, param in sd.items():
+                if name == 'decoder.weight':
+                    continue
+                if name not in update_dict:
+                    continue
+                if not torch.is_floating_point(param):
+                    continue
+                delta = update_dict[name].to(param.device).to(param.dtype)
+                param.add_(delta)
+            global_model.load_state_dict(sd, strict=False)
+        return True
 
+    def _stack_updates(self, weight_accumulator_by_client, name):
+        updates = []
+        for upd in weight_accumulator_by_client:
+            if name not in upd:
+                continue
+            if not torch.is_floating_point(upd[name]):
+                continue
+            updates.append(upd[name].float())
+        if not updates:
+            return None
+        return torch.stack(updates, dim=0)
+
+    def krum(self, global_model, weight_accumulator_by_client, sampled_participants):
+        selected_update = self.krum_updates(weight_accumulator_by_client, sampled_participants)
+        return self._apply_update(global_model, selected_update)
+
+    def multi_krum(self, global_model, weight_accumulator_by_client, sampled_participants):
+        n_clients = len(sampled_participants)
+        if n_clients == 0:
+            return False
+
+        f = int(getattr(self.helper.config, "krum_k", 2))
+        m = int(getattr(self.helper.config, "krum_m", max(1, n_clients - f - 2)))
+        m = max(1, min(m, n_clients))
+
+        flat_updates = [self.flatten_update(upd) for upd in weight_accumulator_by_client]
+        distances = torch.zeros((n_clients, n_clients))
+        for i in range(n_clients):
+            for j in range(i + 1, n_clients):
+                dist = torch.norm(flat_updates[i] - flat_updates[j]) ** 2
+                distances[i, j] = dist
+                distances[j, i] = dist
+
+        scores = []
+        for i in range(n_clients):
+            dists = distances[i].clone()
+            dists[i] = float("inf")
+            dists, _ = torch.sort(dists)
+            keep = max(1, n_clients - f - 2)
+            scores.append(dists[:keep].sum().item())
+
+        selected = np.argsort(scores)[:m]
+        agg_update = {}
+        for name in global_model.state_dict().keys():
+            if name == 'decoder.weight':
+                continue
+            stacked = self._stack_updates(weight_accumulator_by_client, name)
+            if stacked is None:
+                continue
+            agg_update[name] = stacked[selected].mean(dim=0)
+
+        return self._apply_update(global_model, agg_update)
+
+    def trimmed_mean(self, global_model, weight_accumulator_by_client, sampled_participants):
+        n_clients = len(sampled_participants)
+        if n_clients == 0:
+            return False
+        trim_ratio = float(getattr(self.helper.config, "trim_ratio", 0.1))
+        trim_k = int(getattr(self.helper.config, "trim_k", int(trim_ratio * n_clients)))
+        trim_k = max(0, min(trim_k, (n_clients - 1) // 2))
+
+        agg_update = {}
+        for name in global_model.state_dict().keys():
+            if name == 'decoder.weight':
+                continue
+            stacked = self._stack_updates(weight_accumulator_by_client, name)
+            if stacked is None:
+                continue
+            if trim_k > 0:
+                sorted_vals, _ = torch.sort(stacked, dim=0)
+                trimmed = sorted_vals[trim_k:n_clients - trim_k]
+            else:
+                trimmed = stacked
+            agg_update[name] = trimmed.mean(dim=0)
+
+        return self._apply_update(global_model, agg_update)
+
+    def median(self, global_model, weight_accumulator_by_client, sampled_participants):
+        n_clients = len(sampled_participants)
+        if n_clients == 0:
+            return False
+        agg_update = {}
+        for name in global_model.state_dict().keys():
+            if name == 'decoder.weight':
+                continue
+            stacked = self._stack_updates(weight_accumulator_by_client, name)
+            if stacked is None:
+                continue
+            agg_update[name] = torch.median(stacked, dim=0).values
+
+        return self._apply_update(global_model, agg_update)
+
+    def _compute_server_update(self, global_model, max_batches=2):
+        device = next(global_model.parameters()).device
+        global_model.train()
+        global_model.zero_grad(set_to_none=True)
+        criterion = torch.nn.CrossEntropyLoss()
+        n = 0
+        for b, (x, y) in enumerate(self.helper.repair_data):
+            if b >= max_batches:
+                break
+            x, y = x.to(device), y.to(device)
+            out = global_model(x)
+            loss = criterion(out, y)
+            loss.backward()
+            n += 1
+
+        update = {}
+        for name, param in global_model.named_parameters():
+            if name == "decoder.weight":
+                continue
+            if param.grad is None:
+                continue
+            if not torch.is_floating_point(param.grad):
+                continue
+            update[name] = -(param.grad.detach() / max(1, n)).clone()
+
+        global_model.zero_grad(set_to_none=True)
+        return update
+
+    def fltrust(self, global_model, weight_accumulator_by_client, sampled_participants):
+        n_clients = len(sampled_participants)
+        if n_clients == 0:
+            return False
+
+        max_batches = int(getattr(self.helper.config, "fltrust_batches", 5))
+        server_update = self._compute_server_update(global_model, max_batches=max_batches)
+        server_vec = self.flatten_update(server_update)
+        server_norm = torch.norm(server_vec) + 1e-12
+
+        weights = []
+        client_updates = []
+        for upd in weight_accumulator_by_client:
+            vec = self.flatten_update(upd)
+            client_updates.append(upd)
+            cos = torch.dot(vec, server_vec) / (torch.norm(vec) * server_norm + 1e-12)
+            weights.append(max(0.0, float(cos)))
+
+        weight_sum = sum(weights)
+        if weight_sum == 0.0:
+            return self.agg_avg(weight_accumulator_by_client, sampled_participants, global_model)
+
+        agg_update = {}
+        for name in global_model.state_dict().keys():
+            if name == 'decoder.weight':
+                continue
+            stacked = self._stack_updates(client_updates, name)
+            if stacked is None:
+                continue
+            scaled = []
+            for i in range(n_clients):
+                delta = stacked[i]
+                delta_norm = torch.norm(delta) + 1e-12
+                delta = delta * (server_norm / delta_norm)
+                scaled.append(delta * weights[i])
+            agg_update[name] = torch.stack(scaled, dim=0).sum(dim=0) / weight_sum
+
+        return self._apply_update(global_model, agg_update)
     def agg_late_guard(
         self,
         global_model,
